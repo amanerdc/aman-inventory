@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import os
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+import webbrowser
 from typing import Callable, Sequence
 from tkinter import font
 
@@ -82,6 +83,20 @@ def _format_money(value: object) -> str:
     return format(dec, ".2f")
 
 
+def _format_number(value: object) -> str:
+    try:
+        num = float(value)
+    except Exception:
+        return str(value)
+    if num.is_integer():
+        return f"{int(num):,}"
+    return f"{num:,.2f}"
+
+
+def _format_php(value: object) -> str:
+    return f"₱{_format_number(value)}"
+
+
 def _load_preview_image(path: str, size: tuple[int, int] = (240, 180)) -> ImageTk.PhotoImage | None:
     if not path:
         return None
@@ -101,6 +116,7 @@ TAB_LOGOS = {
     "HDN Plants": "assets/hdn_plants.png",
 }
 LOGO_MAX_SIZE = (140, 100)
+GITHUB_RELEASES_URL = "https://github.com/amanerdc/aman-inventory/releases"
 
 UI_COLORS = {
     "bg": "#F5F7FB",
@@ -246,7 +262,7 @@ def enable_smooth_resize(root: tk.Tk) -> None:
                 root.after_cancel(root._resize_after)
             except Exception:
                 pass
-        root._resize_after = root.after(10, lambda: (root.update_idletasks(), root.update()))
+        root._resize_after = root.after(33, root.update_idletasks)
 
     root.bind("<Configure>", _schedule, add="+")
 
@@ -852,7 +868,7 @@ class AssetForm(tk.Toplevel):
             row_idx += 1
             self._row(frame, row_idx, "Initial Delivery Cost", "delivery_cost")
             row_idx += 1
-            self._row(frame, row_idx, "Shop Link", "shop_link")
+            self._row(frame, row_idx, "Shop", "shop_link")
             row_idx += 1
 
         ttk.Label(frame, text="Picture").grid(row=row_idx, column=0, sticky="w", pady=4)
@@ -1254,7 +1270,7 @@ class SummaryWindow(tk.Toplevel):
                 "Delivery Cost",
                 "Quantity",
                 "Total Spent",
-                "Shop Link",
+                "Shop",
             ]
             self.data = [
                 [
@@ -1389,6 +1405,21 @@ class InsightsWindow(tk.Toplevel):
         self.tree = build_treeview(self, columns=("metric", "value"), headings=("Metric", "Value"))
         self.columns = ["Metric", "Value"]
         self.data: list[list[object]] = []
+        self._status_chart: list[tuple[str, float]] = []
+        self._expiry_chart: list[tuple[str, float]] = []
+
+        chart_frame = ttk.Frame(self, padding=8)
+        chart_frame.pack(fill="both", expand=False)
+        ttk.Label(chart_frame, text="Charts", style="Muted.TLabel").pack(anchor="w")
+        self.chart_canvas = tk.Canvas(
+            chart_frame,
+            height=220,
+            background=UI_COLORS["panel"],
+            highlightthickness=1,
+            highlightbackground=UI_COLORS["border"],
+        )
+        self.chart_canvas.pack(fill="x", expand=False, pady=(6, 0))
+        self.chart_canvas.bind("<Configure>", lambda _e: self._draw_charts(), add="+")
         business_combo.bind("<<ComboboxSelected>>", lambda _evt: self.load())
         self.load()
 
@@ -1396,6 +1427,7 @@ class InsightsWindow(tk.Toplevel):
         business = self.business_var.get()
         self.data = self._build_insights(business)
         self._refresh_tree()
+        self._draw_charts()
 
     def _refresh_tree(self) -> None:
         self.tree.delete(*self.tree.get_children())
@@ -1424,12 +1456,12 @@ class InsightsWindow(tk.Toplevel):
             except ValueError:
                 pass
 
-        rows.append(["Asset items", total_assets])
-        rows.append(["Asset qty total", f"{total_qty:g}"])
-        rows.append(["Total spent (assets)", _format_money(total_spent)])
+        rows.append(["Asset items", _format_number(total_assets)])
+        rows.append(["Asset qty total", _format_number(total_qty)])
+        rows.append(["Total spent (assets)", _format_php(total_spent)])
 
         acquisitions = list_asset_acquisitions_report(asset_business, inventory_type)
-        rows.append(["Acquisition entries", len(acquisitions)])
+        rows.append(["Acquisition entries", _format_number(len(acquisitions))])
         if acquisitions:
             total_acq_qty = 0.0
             dates: list[date] = []
@@ -1442,11 +1474,13 @@ class InsightsWindow(tk.Toplevel):
                 if acq_date:
                     dates.append(acq_date)
             avg_qty = total_acq_qty / len(acquisitions)
-            rows.append(["Avg acquisition qty", f"{avg_qty:g}"])
+            rows.append(["Avg acquisition qty", _format_number(avg_qty)])
             if dates:
                 span_days = (max(dates) - min(dates)).days
                 span_months = max(1, round(span_days / 30))
-                rows.append(["Acquisitions per month (approx)", f"{len(acquisitions) / span_months:.2f}"])
+                rows.append(
+                    ["Acquisitions per month (approx)", _format_number(len(acquisitions) / span_months)]
+                )
 
         statuses = list_asset_statuses_report(asset_business, inventory_type)
         status_totals: dict[str, float] = {}
@@ -1460,17 +1494,21 @@ class InsightsWindow(tk.Toplevel):
             status_totals[status] = status_totals.get(status, 0.0) + qty
             total_status_qty += qty
         if status_totals:
-            rows.append(["Status qty total", f"{total_status_qty:g}"])
+            rows.append(["Status qty total", _format_number(total_status_qty)])
+            self._status_chart = []
             for status, qty in sorted(status_totals.items()):
                 pct = (qty / total_status_qty * 100) if total_status_qty else 0
-                rows.append([f"Status: {status}", f"{pct:.1f}% (qty {qty:g})"])
+                rows.append([f"Status: {status}", f"{pct:.1f}% (qty {_format_number(qty)})"])
+                self._status_chart.append((status, pct))
+        else:
+            self._status_chart = []
 
         if business == "Unica":
             products = list_products("Unica")
-            rows.append(["Perishable products", len(products)])
+            rows.append(["Perishable products", _format_number(len(products))])
 
             expiry_rows = list_expiry_dates_report("Unica")
-            rows.append(["Expiry date entries", len(expiry_rows)])
+            rows.append(["Expiry date entries", _format_number(len(expiry_rows))])
             today = date.today()
             expiring_7 = 0
             expired = 0
@@ -1483,19 +1521,67 @@ class InsightsWindow(tk.Toplevel):
                     expired += 1
                 elif delta <= 7:
                     expiring_7 += 1
-            rows.append(["Expired entries", expired])
-            rows.append(["Expiring in 7 days", expiring_7])
+            rows.append(["Expired entries", _format_number(expired)])
+            rows.append(["Expiring in 7 days", _format_number(expiring_7)])
+            self._expiry_chart = [("Expired", float(expired)), ("Expiring <=7d", float(expiring_7))]
 
             in_logs = list_in_logs_report("Unica")
             out_logs = list_out_logs_report("Unica")
-            rows.append(["IN logs", len(in_logs)])
-            rows.append(["OUT logs", len(out_logs)])
+            rows.append(["IN logs", _format_number(len(in_logs))])
+            rows.append(["OUT logs", _format_number(len(out_logs))])
             in_qty = sum(float(r.get("quantity") or 0) for r in in_logs)
             out_qty = sum(float(r.get("quantity") or 0) for r in out_logs)
-            rows.append(["IN qty total", f"{in_qty:g}"])
-            rows.append(["OUT qty total", f"{out_qty:g}"])
+            rows.append(["IN qty total", _format_number(in_qty)])
+            rows.append(["OUT qty total", _format_number(out_qty)])
+        else:
+            self._expiry_chart = []
 
         return rows
+
+    def _draw_charts(self) -> None:
+        self.chart_canvas.delete("all")
+        width = int(self.chart_canvas.winfo_width() or 800)
+        height = int(self.chart_canvas.winfo_height() or 220)
+        margin = 10
+
+        sections = []
+        if self._status_chart:
+            sections.append(("Status %", self._status_chart))
+        if self._expiry_chart:
+            sections.append(("Expiry", self._expiry_chart))
+        if not sections:
+            self.chart_canvas.create_text(
+                width // 2,
+                height // 2,
+                text="No chart data available.",
+                fill=UI_COLORS["muted"],
+            )
+            return
+
+        section_height = max(1, (height - margin * 2) // len(sections))
+        for idx, (title, items) in enumerate(sections):
+            top = margin + idx * section_height
+            self.chart_canvas.create_text(margin, top + 8, text=title, anchor="nw", fill=UI_COLORS["text"])
+            if not items:
+                continue
+            bar_area_top = top + 24
+            bar_area_height = section_height - 34
+            bar_width = max(10, (width - margin * 2) // len(items))
+            max_val = max(v for _n, v in items) or 1
+            for i, (name, value) in enumerate(items):
+                x0 = margin + i * bar_width + 4
+                x1 = x0 + bar_width - 8
+                bar_h = int((value / max_val) * max(10, bar_area_height))
+                y1 = bar_area_top + bar_area_height
+                y0 = y1 - bar_h
+                self.chart_canvas.create_rectangle(x0, y0, x1, y1, fill=UI_COLORS["accent"], outline="")
+                self.chart_canvas.create_text(
+                    (x0 + x1) / 2,
+                    y1 + 2,
+                    text=name,
+                    anchor="n",
+                    fill=UI_COLORS["muted"],
+                )
 
     def _export(self, kind: str) -> None:
         if not self.data:
@@ -1581,7 +1667,8 @@ class MainWindow:
         right = ttk.Frame(self.top)
         right.grid(row=0, column=2, sticky="e")
         ttk.Button(right, text="Summary / Export", command=self.open_summary).pack(side="left", padx=4)
-        ttk.Button(right, text="View Insights", command=self.open_insights).pack(side="left")
+        ttk.Button(right, text="View Insights", command=self.open_insights).pack(side="left", padx=4)
+        ttk.Button(right, text="Check for Updates", command=self.open_updates).pack(side="left")
 
 
         self.notebook = ttk.Notebook(self.root)
@@ -1603,6 +1690,15 @@ class MainWindow:
 
     def open_insights(self) -> None:
         InsightsWindow(self.root, self.allowed_businesses)
+
+    def open_updates(self) -> None:
+        if not GITHUB_RELEASES_URL:
+            messagebox.showinfo("Updates", "Set GITHUB_RELEASES_URL in app.py to your GitHub releases page.")
+            return
+        try:
+            webbrowser.open(GITHUB_RELEASES_URL)
+        except Exception:
+            messagebox.showwarning("Updates", "Unable to open the releases page.")
 
     def _register_tree(self, tree: ttk.Treeview, tab: tk.Widget) -> None:
         self._tree_tabs[tree] = tab
@@ -1705,7 +1801,7 @@ class MainWindow:
         ttk.Button(top, text="Refresh", command=self.refresh_perishable).grid(row=0, column=6, sticky="w", padx=6)
 
         buttons = ttk.Frame(top)
-        buttons.grid(row=1, column=1, columnspan=6, sticky="w", pady=(6, 0))
+        buttons.grid(row=1, column=1, columnspan=6, sticky="w", pady=(1, 0))
         ttk.Button(buttons, text="Add Product", command=self.add_product).pack(side="left", padx=2)
         ttk.Button(buttons, text="Edit Product", command=self.edit_product).pack(side="left", padx=2)
         ttk.Button(buttons, text="Delete Product", command=self.delete_product).pack(side="left", padx=2)
@@ -2237,7 +2333,7 @@ class MainWindow:
             lambda _e: self.refresh_assets(tree, business, inventory_type, search_var, type_var, sort_var),
         )
         buttons = ttk.Frame(top)
-        buttons.grid(row=1, column=1, columnspan=8, sticky="w", pady=(6, 0))
+        buttons.grid(row=1, column=1, columnspan=8, sticky="w", pady=(1, 0))
         ttk.Button(buttons, text="Add", command=lambda: self.add_asset(tree, business, inventory_type, search_var, type_var)).pack(
             side="left", padx=2
         )
@@ -2288,7 +2384,6 @@ class MainWindow:
             "quantity",
             "total_spent",
             "location",
-            "business",
         ]
         headings = [
             "No.",
@@ -2302,7 +2397,6 @@ class MainWindow:
             "Qty",
             "Total Spent",
             "Location",
-            "Business",
         ]
         tree = build_treeview(tab, columns, headings, image_heading="Picture", style="Photo.Treeview")
         tree.column("no", width=60, anchor="center")
@@ -2387,7 +2481,6 @@ class MainWindow:
                     row["quantity"],
                     _format_money(row.get("total_spent")),
                     row.get("location") or "",
-                    row["business"],
                 ),
             )
             set_tree_image(tree, str(row["id"]), row.get("picture_path"))
@@ -2570,7 +2663,7 @@ class MainWindow:
             status_tree.insert("", "end", values=(entry["status"], entry["quantity"]))
 
         acq_columns = ("date", "acquisition_cost", "delivery_cost", "qty", "shop_link")
-        acq_headings = ("Acquisition Date", "Acquisition Cost", "Delivery Cost", "Quantity", "Shop Link")
+        acq_headings = ("Acquisition Date", "Acquisition Cost", "Delivery Cost", "Quantity", "Shop")
         acq_tree = build_treeview(win, acq_columns, acq_headings)
         acq_tree.configure(height=5)
         for entry in list_asset_acquisitions(asset_id):
@@ -2585,6 +2678,30 @@ class MainWindow:
                     entry.get("shop_link") or "",
                 ),
             )
+
+        def _copy_shop(_event: tk.Event | None = None) -> None:
+            sel = acq_tree.selection()
+            if not sel:
+                return
+            values = acq_tree.item(sel[0], "values")
+            if len(values) < 5:
+                return
+            shop_val = values[4]
+            win.clipboard_clear()
+            win.clipboard_append(str(shop_val))
+
+        menu = tk.Menu(win, tearoff=0)
+        menu.add_command(label="Copy Shop", command=_copy_shop)
+
+        def _show_menu(event: tk.Event) -> str:
+            row_id = acq_tree.identify_row(event.y)
+            if row_id:
+                acq_tree.selection_set(row_id)
+                menu.tk_popup(event.x_root, event.y_root)
+            return "break"
+
+        acq_tree.bind("<Button-3>", _show_menu, add="+")
+        acq_tree.bind("<Button-2>", _show_menu, add="+")
 
     def view_statuses(self, tree: ttk.Treeview, business: str, inventory_type: str) -> None:
         sel = tree.selection()
@@ -2707,7 +2824,7 @@ class MainWindow:
         ttk.Label(top, text="Add acquisition breakdown for this item").pack(side="left")
 
         columns = ("id", "date", "acquisition_cost", "delivery_cost", "qty", "shop_link")
-        headings = ("ID", "Acquisition Date", "Acquisition Cost", "Delivery Cost", "Quantity", "Shop Link")
+        headings = ("ID", "Acquisition Date", "Acquisition Cost", "Delivery Cost", "Quantity", "Shop")
         tree_acq = build_treeview(win, columns, headings)
 
         def refresh() -> None:
@@ -2751,7 +2868,7 @@ class MainWindow:
             ttk.Label(frm, text="Delivery Cost").grid(row=3, column=0, sticky="w", pady=4)
             ttk.Entry(frm, textvariable=delivery_var).grid(row=3, column=1, sticky="ew")
 
-            ttk.Label(frm, text="Shop Link").grid(row=4, column=0, sticky="w", pady=4)
+            ttk.Label(frm, text="Shop").grid(row=4, column=0, sticky="w", pady=4)
             ttk.Entry(frm, textvariable=link_var).grid(row=4, column=1, sticky="ew")
 
             def save() -> None:
@@ -2818,7 +2935,7 @@ class MainWindow:
             ttk.Label(frm, text="Delivery Cost").grid(row=3, column=0, sticky="w", pady=4)
             ttk.Entry(frm, textvariable=delivery_var).grid(row=3, column=1, sticky="ew")
 
-            ttk.Label(frm, text="Shop Link").grid(row=4, column=0, sticky="w", pady=4)
+            ttk.Label(frm, text="Shop").grid(row=4, column=0, sticky="w", pady=4)
             ttk.Entry(frm, textvariable=link_var).grid(row=4, column=1, sticky="ew")
 
             def save() -> None:

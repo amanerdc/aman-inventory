@@ -656,10 +656,10 @@ def list_assets(
     if search:
         query += (
             " AND (CAST(id AS TEXT) ILIKE %s OR name ILIKE %s OR brand ILIKE %s OR model ILIKE %s "
-            "OR specifications ILIKE %s OR series_number ILIKE %s OR location ILIKE %s)"
+            "OR specifications ILIKE %s OR series_number ILIKE %s OR location ILIKE %s OR shop_link ILIKE %s)"
         )
         like = f"%{search}%"
-        params.extend([like, like, like, like, like, like, like])
+        params.extend([like, like, like, like, like, like, like, like])
     if type_filter:
         query += " AND type = %s"
         params.append(type_filter)
