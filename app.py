@@ -17,6 +17,7 @@ from db import (
     add_user,
     delete_asset,
     duplicate_asset,
+    duplicate_product,
     delete_asset_acquisition,
     delete_in_log,
     delete_out_log,
@@ -53,7 +54,7 @@ from db import (
     update_user,
     verify_user,
 )
-from export_utils import export_to_excel, export_to_jpg, export_to_pdf
+from export_utils import export_to_excel
 
 try:
     from tkcalendar import DateEntry  # type: ignore
@@ -114,9 +115,13 @@ TAB_LOGOS = {
     "Unica Non-Perishable": "assets/unica_non_perishable.png",
     "HDN Warehouse": "assets/hdn_warehouse.png",
     "HDN Plants": "assets/hdn_plants.png",
+    "Airbnb": "assets/airbnb.png",
 }
-LOGO_MAX_SIZE = (140, 100)
+LOGO_MAX_SIZE = (120, 100)
 GITHUB_RELEASES_URL = "https://github.com/amanerdc/aman-inventory/releases"
+
+AIRBNB_AREAS = ["Living & Dining Area", "Toilet & Bath", "Loft Area"]
+AIRBNB_ROOMS = ["Room 1", "Room 2", "Room 3"]
 
 UI_COLORS = {
     "bg": "#F5F7FB",
@@ -256,13 +261,24 @@ def apply_theme(root: tk.Tk) -> None:
 
 
 def enable_smooth_resize(root: tk.Tk) -> None:
+    def _tick() -> None:
+        if getattr(root, "_is_resizing", False):
+            root.update_idletasks()
+            root._resize_tick = root.after(16, _tick)
+
+    def _stop_resize() -> None:
+        root._is_resizing = False
+
     def _schedule(_event: tk.Event | None = None) -> None:
+        root._is_resizing = True
+        if not hasattr(root, "_resize_tick"):
+            root._resize_tick = root.after(16, _tick)
         if hasattr(root, "_resize_after"):
             try:
                 root.after_cancel(root._resize_after)
             except Exception:
                 pass
-        root._resize_after = root.after(33, root.update_idletasks)
+        root._resize_after = root.after(150, _stop_resize)
 
     root.bind("<Configure>", _schedule, add="+")
 
@@ -554,7 +570,6 @@ class ProductForm(tk.Toplevel):
         self.on_save = on_save
         self.initial = initial or {}
         self.transient(parent)
-        self.grab_set()
 
         frame = ttk.Frame(self, padding=12)
         frame.pack(fill="both", expand=True)
@@ -818,17 +833,19 @@ class AssetForm(tk.Toplevel):
         self.business = business
         self.inventory_type = inventory_type
         self.is_new = not bool(self.initial.get("id"))
+        self.is_airbnb = self.inventory_type == "Airbnb" or self.business == "Airbnb"
         self.transient(parent)
-        self.grab_set()
 
         frame = ttk.Frame(self, padding=12)
         frame.pack(fill="both", expand=True)
 
+        area_default = self.initial.get("brand", "") if not self.is_airbnb else (self.initial.get("brand") or AIRBNB_AREAS[0])
+        room_default = self.initial.get("model", "") if not self.is_airbnb else (self.initial.get("model") or AIRBNB_ROOMS[0])
         self.vars = {
             "picture_path": tk.StringVar(value=self.initial.get("picture_path", "")),
             "name": tk.StringVar(value=self.initial.get("name", "")),
-            "brand": tk.StringVar(value=self.initial.get("brand", "")),
-            "model": tk.StringVar(value=self.initial.get("model", "")),
+            "brand": tk.StringVar(value=area_default),
+            "model": tk.StringVar(value=room_default),
             "specifications": tk.StringVar(value=self.initial.get("specifications", "")),
             "series_number": tk.StringVar(value=self.initial.get("series_number", "")),
             "quantity": tk.StringVar(value=_str_or_empty(self.initial.get("quantity"), "1")),
@@ -845,21 +862,41 @@ class AssetForm(tk.Toplevel):
                 }
             )
 
-        self._row(frame, 0, "Name", "name")
-        self._row(frame, 1, "Brand", "brand")
-        self._row(frame, 2, "Model", "model")
-        self._row(frame, 3, "Specifications", "specifications")
-        self._row(frame, 4, "Series Number", "series_number")
+        row_idx = 0
+        self._row(frame, row_idx, "Name", "name")
+        row_idx += 1
+        if self.is_airbnb:
+            ttk.Label(frame, text="Area").grid(row=row_idx, column=0, sticky="w", pady=4)
+            ttk.Combobox(frame, textvariable=self.vars["brand"], values=AIRBNB_AREAS, state="readonly").grid(
+                row=row_idx, column=1, columnspan=2, sticky="ew"
+            )
+            row_idx += 1
+            ttk.Label(frame, text="Room No.").grid(row=row_idx, column=0, sticky="w", pady=4)
+            ttk.Combobox(frame, textvariable=self.vars["model"], values=AIRBNB_ROOMS, state="readonly").grid(
+                row=row_idx, column=1, columnspan=2, sticky="ew"
+            )
+            row_idx += 1
+        else:
+            self._row(frame, row_idx, "Brand", "brand")
+            row_idx += 1
+            self._row(frame, row_idx, "Model", "model")
+            row_idx += 1
+        self._row(frame, row_idx, "Specifications", "specifications")
+        row_idx += 1
+        self._row(frame, row_idx, "Series Number", "series_number")
+        row_idx += 1
 
-        self._row(frame, 5, "Quantity", "quantity")
-        self._row(frame, 6, "Location", "location")
+        self._row(frame, row_idx, "Quantity", "quantity")
+        row_idx += 1
+        self._row(frame, row_idx, "Location", "location")
+        row_idx += 1
 
-        ttk.Label(frame, text="Type").grid(row=7, column=0, sticky="w", pady=4)
+        ttk.Label(frame, text="Type").grid(row=row_idx, column=0, sticky="w", pady=4)
         ttk.Combobox(frame, textvariable=self.vars["type"], values=ASSET_TYPES, state="readonly").grid(
-            row=7, column=1, sticky="ew"
+            row=row_idx, column=1, columnspan=2, sticky="ew"
         )
 
-        row_idx = 8
+        row_idx += 1
         if self.is_new:
             ttk.Label(frame, text="Initial Acquisition Date").grid(row=row_idx, column=0, sticky="w", pady=4)
             make_date_entry(frame, self.vars["acquisition_date"]).grid(row=row_idx, column=1, columnspan=2, sticky="ew")
@@ -1062,6 +1099,12 @@ class SummaryWindow(tk.Toplevel):
         self.end_entry = make_date_entry(top, self.end_var)
         self.end_entry.grid(row=1, column=3, sticky="w", padx=6)
 
+        self.room_label = ttk.Label(top, text="Room No.")
+        self.room_var = tk.StringVar(value=AIRBNB_ROOMS[0])
+        self.room_combo = ttk.Combobox(top, textvariable=self.room_var, values=AIRBNB_ROOMS, state="readonly")
+        self.room_label.grid(row=2, column=0, sticky="w")
+        self.room_combo.grid(row=2, column=1, sticky="w", padx=6)
+
         self.range_buttons = [
             ttk.Button(top, text="Daily", command=lambda: self._set_range("daily")),
             ttk.Button(top, text="Weekly", command=lambda: self._set_range("weekly")),
@@ -1073,8 +1116,6 @@ class SummaryWindow(tk.Toplevel):
 
         ttk.Button(top, text="Load", command=self.load).grid(row=0, column=4, padx=6)
         ttk.Button(top, text="Export Excel", command=self.export_excel).grid(row=0, column=5, padx=6)
-        ttk.Button(top, text="Export PDF", command=self.export_pdf).grid(row=0, column=6, padx=6)
-        ttk.Button(top, text="Export JPG", command=self.export_jpg).grid(row=0, column=7, padx=6)
 
         self.tree = build_treeview(self, columns=(), headings=())
         self.data: list[list[object]] = []
@@ -1095,12 +1136,17 @@ class SummaryWindow(tk.Toplevel):
                 "Unica Non-Perishable Statuses",
                 "Unica Non-Perishable Acquisitions",
             ]
-        else:
+        elif business == "HDN Integrated Farm":
             options = [
                 "HDN Warehouse",
                 "HDN Warehouse Statuses",
                 "HDN Warehouse Acquisitions",
                 "HDN Plants",
+            ]
+        else:
+            options = [
+                "Airbnb Inventory",
+                "Airbnb Inspection Checklist",
             ]
         self.type_combo["values"] = options
         if self.type_var.get() not in options:
@@ -1133,6 +1179,7 @@ class SummaryWindow(tk.Toplevel):
             "Unica Perishable OUT Logs",
         )
         acquisitions = report_type in ("Unica Non-Perishable Acquisitions", "HDN Warehouse Acquisitions")
+        inspection = report_type == "Airbnb Inspection Checklist"
         state = "normal" if (perishable or acquisitions) else "disabled"
         try:
             self.start_entry.configure(state=state)
@@ -1144,6 +1191,12 @@ class SummaryWindow(tk.Toplevel):
             pass
         for btn in self.range_buttons:
             btn.configure(state=state)
+        if inspection:
+            self.room_label.grid()
+            self.room_combo.grid()
+        else:
+            self.room_label.grid_remove()
+            self.room_combo.grid_remove()
         if not (perishable or acquisitions):
             self.start_var.set("")
             self.end_var.set("")
@@ -1164,6 +1217,9 @@ class SummaryWindow(tk.Toplevel):
             return
         if inv_type.startswith("HDN") and business != "HDN Integrated Farm":
             messagebox.showwarning("Access", "HDN reports require HDN Integrated Farm access.")
+            return
+        if inv_type.startswith("Airbnb") and business != "Airbnb":
+            messagebox.showwarning("Access", "Airbnb reports require Airbnb access.")
             return
 
         start_date = self.start_var.get().strip()
@@ -1217,16 +1273,63 @@ class SummaryWindow(tk.Toplevel):
             ]
             self.image_enabled = False
             self.image_paths = []
-        elif inv_type in ("Unica Non-Perishable", "HDN Warehouse"):
-            biz = "Unica" if inv_type == "Unica Non-Perishable" else "HDN Integrated Farm"
-            rows = list_assets_for_export(biz, inv_type, start_date or None, end_date or None)
+        elif inv_type in ("Unica Non-Perishable", "HDN Warehouse", "Airbnb Inventory"):
+            if inv_type == "Unica Non-Perishable":
+                biz = "Unica"
+                inv_label = "Unica Non-Perishable"
+                columns = [
+                    "No.",
+                    "Id.",
+                    "Name",
+                    "Type",
+                    "Brand",
+                    "Model",
+                    "Specifications",
+                    "Qty",
+                    "Total Spent",
+                    "Location",
+                ]
+                use_airbnb_labels = False
+            elif inv_type == "HDN Warehouse":
+                biz = "HDN Integrated Farm"
+                inv_label = "HDN Warehouse"
+                columns = [
+                    "No.",
+                    "Id.",
+                    "Name",
+                    "Type",
+                    "Brand",
+                    "Model",
+                    "Specifications",
+                    "Qty",
+                    "Total Spent",
+                    "Location",
+                ]
+                use_airbnb_labels = False
+            else:
+                biz = "Airbnb"
+                inv_label = "Airbnb"
+                columns = [
+                    "No.",
+                    "Id.",
+                    "Name",
+                    "Type",
+                    "Area",
+                    "Room No.",
+                    "Specifications",
+                    "Qty",
+                    "Total Spent",
+                    "Location",
+                ]
+                use_airbnb_labels = True
+            rows = list_assets_for_export(biz, inv_label, start_date or None, end_date or None)
             self.columns = [
                 "No.",
                 "Id.",
                 "Name",
                 "Type",
-                "Brand",
-                "Model",
+                "Area" if use_airbnb_labels else "Brand",
+                "Room No." if use_airbnb_labels else "Model",
                 "Specifications",
                 "Qty",
                 "Total Spent",
@@ -1242,13 +1345,31 @@ class SummaryWindow(tk.Toplevel):
                     r.get("model") or "",
                     r.get("specifications") or "",
                     r["quantity"],
-                    _format_money(r.get("total_spent")),
+                    _format_php(r.get("total_spent")),
                     r.get("location") or "",
                 ]
                 for idx, r in enumerate(rows, start=1)
             ]
             self.image_enabled = True
             self.image_paths = [r.get("picture_path") for r in rows]
+        elif inv_type == "Airbnb Inspection Checklist":
+            room_no = self.room_var.get().strip()
+            if not room_no:
+                messagebox.showwarning("Missing", "Select a room number.")
+                return
+            rows = self._get_airbnb_inspection_items(room_no)
+            self.columns = ["Area", "Item", "Qty", "Turn-over"]
+            self.data = [
+                [
+                    r.get("brand") or "",
+                    r.get("name") or "",
+                    r.get("quantity") or "",
+                    "",
+                ]
+                for r in rows
+            ]
+            self.image_enabled = False
+            self.image_paths = []
         elif inv_type in ("Unica Non-Perishable Statuses", "HDN Warehouse Statuses"):
             biz = "Unica" if inv_type.startswith("Unica") else "HDN Integrated Farm"
             inv_label = "Unica Non-Perishable" if inv_type.startswith("Unica") else "HDN Warehouse"
@@ -1269,7 +1390,6 @@ class SummaryWindow(tk.Toplevel):
                 "Acquisition Cost",
                 "Delivery Cost",
                 "Quantity",
-                "Total Spent",
                 "Shop",
             ]
             self.data = [
@@ -1278,10 +1398,9 @@ class SummaryWindow(tk.Toplevel):
                     r.get("name") or "",
                     r.get("type") or "",
                     r.get("acquisition_date") or "",
-                    _format_money(r.get("acquisition_cost")),
-                    _format_money(r.get("delivery_cost")) if r.get("delivery_cost") is not None else "",
+                    _format_php(r.get("acquisition_cost")),
+                    _format_php(r.get("delivery_cost")) if r.get("delivery_cost") is not None else "",
                     r["quantity"],
-                    _format_money(float(r.get("acquisition_cost") or 0) * float(r.get("quantity") or 0)),
                     r.get("shop_link") or "",
                 ]
                 for r in rows
@@ -1295,6 +1414,18 @@ class SummaryWindow(tk.Toplevel):
             self.image_paths = []
 
         self._refresh_tree()
+
+    def _get_airbnb_inspection_items(self, room_no: str) -> list[dict]:
+        rows = list_assets("Airbnb", "Airbnb")
+        room_items = [r for r in rows if (r.get("model") or "") == room_no]
+        area_order = {name: idx for idx, name in enumerate(AIRBNB_AREAS)}
+        room_items.sort(
+            key=lambda r: (
+                area_order.get(r.get("brand") or "", 99),
+                (r.get("name") or "").lower(),
+            )
+        )
+        return room_items
 
     def _refresh_tree(self) -> None:
         self.tree.delete(*self.tree.get_children())
@@ -1317,68 +1448,70 @@ class SummaryWindow(tk.Toplevel):
                 path = self.image_paths[idx] if idx < len(self.image_paths) else None
                 set_tree_image(self.tree, iid, path)
 
+    def _with_type_headers(
+        self,
+        columns: Sequence[str],
+        rows: Sequence[Sequence[object]],
+        image_paths: Sequence[str | None] | None = None,
+    ) -> tuple[list[list[object]], list[str | None] | None]:
+        if "Type" not in columns:
+            return [list(row) for row in rows], list(image_paths) if image_paths is not None else None
+        type_idx = columns.index("Type")
+        grouped_rows: list[list[object]] = []
+        grouped_images: list[str | None] | None = [] if image_paths is not None else None
+        last_type: str | None = None
+        for idx, row in enumerate(rows):
+            row_list = list(row)
+            row_type = str(row_list[type_idx] or "").strip()
+            if row_type != last_type:
+                header_row = [""] * len(columns)
+                header_row[type_idx] = row_type or "Uncategorized"
+                grouped_rows.append(header_row)
+                if grouped_images is not None:
+                    grouped_images.append(None)
+                last_type = row_type
+            grouped_rows.append(row_list)
+            if grouped_images is not None:
+                grouped_images.append(image_paths[idx] if idx < len(image_paths) else None)
+        return grouped_rows, grouped_images
+
     def _export(self, kind: str) -> None:
+        if kind != "excel":
+            messagebox.showinfo("Export", "Exports are available as Excel only.")
+            return
         if not self.data or not self.columns:
             messagebox.showwarning("Empty", "Load a report before exporting.")
             return
-        filetypes = [("Excel", "*.xlsx"), ("CSV", "*.csv")] if kind == "excel" else [(kind.upper(), f"*.{kind}")]
-        path = filedialog.asksaveasfilename(defaultextension=f".{kind}", filetypes=filetypes)
+        filetypes = [("Excel", "*.xlsx"), ("CSV", "*.csv")]
+        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=filetypes)
         if not path:
             return
-        start = self.start_var.get().strip()
-        end = self.end_var.get().strip()
-        range_label = f"{start} to {end}" if start and end else "All Dates"
-        title = f"{self.business_var.get()} - {self.type_var.get()} ({range_label})"
         header_lines = [
             f"{self.business_var.get()} Inventory",
             f"{self.type_var.get()}",
             f"As of {date.today().strftime('%Y-%m-%d')}",
         ]
         try:
-            if kind == "excel":
-                export_to_excel(
-                    path,
-                    self.columns,
-                    self.data,
-                    image_paths=self.image_paths if self.image_enabled else None,
-                    image_height=PHOTO_THUMBNAIL_SIZE[1],
-                    header_lines=header_lines,
-                    image_column=1,
-                )
-            elif kind == "pdf":
-                export_to_pdf(
-                    path,
-                    title,
-                    self.columns,
-                    self.data,
-                    image_paths=self.image_paths if self.image_enabled else None,
-                    image_height=PHOTO_THUMBNAIL_SIZE[1],
-                    header_lines=header_lines,
-                    image_column=1,
-                )
-            else:
-                export_to_jpg(
-                    path,
-                    title,
-                    self.columns,
-                    self.data,
-                    image_paths=self.image_paths if self.image_enabled else None,
-                    image_height=PHOTO_THUMBNAIL_SIZE[1],
-                    header_lines=header_lines,
-                    image_column=1,
-                )
+            export_rows, export_images = self._with_type_headers(
+                self.columns,
+                self.data,
+                self.image_paths if self.image_enabled else None,
+            )
+            export_to_excel(
+                path,
+                self.columns,
+                export_rows,
+                image_paths=export_images if self.image_enabled else None,
+                image_height=PHOTO_THUMBNAIL_SIZE[1],
+                header_lines=header_lines,
+                image_column=1,
+            )
             messagebox.showinfo("Exported", f"Saved to {path}")
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc))
 
     def export_excel(self) -> None:
         self._export("excel")
-
-    def export_pdf(self) -> None:
-        self._export("pdf")
-
-    def export_jpg(self) -> None:
-        self._export("jpg")
 
 
 class InsightsWindow(tk.Toplevel):
@@ -1399,8 +1532,6 @@ class InsightsWindow(tk.Toplevel):
 
         ttk.Button(top, text="Refresh", command=self.load).grid(row=0, column=2, padx=6)
         ttk.Button(top, text="Export Excel", command=self.export_excel).grid(row=0, column=3, padx=6)
-        ttk.Button(top, text="Export PDF", command=self.export_pdf).grid(row=0, column=4, padx=6)
-        ttk.Button(top, text="Export JPG", command=self.export_jpg).grid(row=0, column=5, padx=6)
 
         self.tree = build_treeview(self, columns=("metric", "value"), headings=("Metric", "Value"))
         self.columns = ["Metric", "Value"]
@@ -1419,9 +1550,21 @@ class InsightsWindow(tk.Toplevel):
             highlightbackground=UI_COLORS["border"],
         )
         self.chart_canvas.pack(fill="x", expand=False, pady=(6, 0))
-        self.chart_canvas.bind("<Configure>", lambda _e: self._draw_charts(), add="+")
+        self.chart_canvas.bind("<Configure>", lambda _e: self._schedule_chart_draw(), add="+")
         business_combo.bind("<<ComboboxSelected>>", lambda _evt: self.load())
         self.load()
+
+    def _schedule_chart_draw(self) -> None:
+        root = self.chart_canvas.winfo_toplevel()
+        if getattr(root, "_is_resizing", False):
+            if hasattr(self, "_chart_after"):
+                try:
+                    self.after_cancel(self._chart_after)
+                except Exception:
+                    pass
+            self._chart_after = self.after(80, self._draw_charts)
+            return
+        self._draw_charts()
 
     def load(self) -> None:
         business = self.business_var.get()
@@ -1441,7 +1584,12 @@ class InsightsWindow(tk.Toplevel):
     def _build_insights(self, business: str) -> list[list[object]]:
         rows: list[list[object]] = []
         asset_business = business
-        inventory_type = "Unica Non-Perishable" if business == "Unica" else "HDN Warehouse"
+        if business == "Unica":
+            inventory_type = "Unica Non-Perishable"
+        elif business == "Airbnb":
+            inventory_type = "Airbnb"
+        else:
+            inventory_type = "HDN Warehouse"
         assets = list_assets(asset_business, inventory_type)
         total_assets = len(assets)
         total_qty = 0.0
@@ -1587,35 +1735,26 @@ class InsightsWindow(tk.Toplevel):
         if not self.data:
             messagebox.showwarning("Empty", "No insights to export.")
             return
-        filetypes = [("Excel", "*.xlsx"), ("CSV", "*.csv")] if kind == "excel" else [(kind.upper(), f"*.{kind}")]
-        path = filedialog.asksaveasfilename(defaultextension=f".{kind}", filetypes=filetypes)
+        if kind != "excel":
+            messagebox.showinfo("Export", "Exports are available as Excel only.")
+            return
+        filetypes = [("Excel", "*.xlsx"), ("CSV", "*.csv")]
+        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=filetypes)
         if not path:
             return
-        title = f"{self.business_var.get()} - Insights"
         header_lines = [
             f"{self.business_var.get()} Inventory",
             "Insights",
             f"As of {date.today().strftime('%Y-%m-%d')}",
         ]
         try:
-            if kind == "excel":
-                export_to_excel(path, self.columns, self.data, header_lines=header_lines)
-            elif kind == "pdf":
-                export_to_pdf(path, title, self.columns, self.data, header_lines=header_lines)
-            else:
-                export_to_jpg(path, title, self.columns, self.data, header_lines=header_lines)
+            export_to_excel(path, self.columns, self.data, header_lines=header_lines)
             messagebox.showinfo("Exported", f"Saved to {path}")
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc))
 
     def export_excel(self) -> None:
         self._export("excel")
-
-    def export_pdf(self) -> None:
-        self._export("pdf")
-
-    def export_jpg(self) -> None:
-        self._export("jpg")
 
 
 class MainWindow:
@@ -1682,6 +1821,8 @@ class MainWindow:
         if "HDN Integrated Farm" in self.allowed_businesses:
             self._build_assets_tab("HDN Integrated Farm", "HDN Warehouse")
             self._build_blank_tab("HDN Plants")
+        if "Airbnb" in self.allowed_businesses:
+            self._build_assets_tab("Airbnb", "Airbnb")
         if self.is_admin:
             self._build_users_tab()
 
@@ -1746,16 +1887,40 @@ class MainWindow:
         if not hasattr(tree, "_summary_label"):
             return
         selected = len(tree.selection())
+        selected_qty = self._get_selected_qty(tree) if selected else None
         parts = [f"Items: {total_items}"]
         if total_qty is not None:
             parts.append(f"Total qty: {total_qty:g}")
         if selected:
-            parts.append(f"Selected: {selected}")
+            if selected_qty is not None:
+                parts.append(f"Selected: {selected} (Qty: {selected_qty:g})")
+            else:
+                parts.append(f"Selected: {selected}")
         text = " | ".join(parts)
         tree._summary_label.configure(text=text)
         tree._summary_text = text
         if hasattr(self, "header_summary") and self._is_tree_active(tree):
             self.header_summary.configure(text=text)
+
+    def _get_selected_qty(self, tree: ttk.Treeview) -> float | None:
+        qty_column = getattr(tree, "_qty_column", None)
+        if not qty_column:
+            return None
+        columns = list(tree["columns"])
+        if qty_column not in columns:
+            return None
+        qty_idx = columns.index(qty_column)
+        total = 0.0
+        for item_id in tree.selection():
+            values = tree.item(item_id, "values")
+            if qty_idx >= len(values):
+                continue
+            raw = values[qty_idx]
+            try:
+                total += float(str(raw).replace(",", ""))
+            except Exception:
+                continue
+        return total
 
     def _bind_summary_updates(self, tree: ttk.Treeview) -> None:
         def _on_select(_event: tk.Event) -> None:
@@ -1783,6 +1948,7 @@ class MainWindow:
 
         top = ttk.Frame(tab, padding=(8, 2))
         top.pack(fill="x")
+        top.columnconfigure(1, weight=1, minsize=180)
 
         self.perishable_search = tk.StringVar()
         logo_label = ttk.Label(top)
@@ -1801,22 +1967,22 @@ class MainWindow:
         ttk.Button(top, text="Refresh", command=self.refresh_perishable).grid(row=0, column=6, sticky="w", padx=6)
 
         buttons = ttk.Frame(top)
-        buttons.grid(row=1, column=1, columnspan=6, sticky="w", pady=(1, 0))
+        buttons.grid(row=1, column=1, columnspan=6, sticky="w", pady=(0, 0))
         ttk.Button(buttons, text="Add Product", command=self.add_product).pack(side="left", padx=2)
         ttk.Button(buttons, text="Edit Product", command=self.edit_product).pack(side="left", padx=2)
         ttk.Button(buttons, text="Delete Product", command=self.delete_product).pack(side="left", padx=2)
+        ttk.Button(buttons, text="Duplicate", command=self.duplicate_product).pack(side="left", padx=2)
         ttk.Button(buttons, text="Record IN", command=self.record_in).pack(side="left", padx=2)
         ttk.Button(buttons, text="Record OUT", command=self.record_out).pack(side="left", padx=2)
         ttk.Button(buttons, text="View Record", command=self.view_perishable_record).pack(side="left", padx=2)
         ttk.Button(buttons, text="Add Expiry Dates", command=self.add_expiry_dates).pack(side="left", padx=2)
-
-        top.columnconfigure(1, weight=1)
 
         columns = ["no", "id", "name", "category", "unit", "opening", "in_qty", "out_qty", "ending"]
         headings = ["No.", "Id.", "Product", "Category", "Unit", "Opening", "In", "Out", "Ending"]
         self.perishable_tree = build_treeview(tab, columns, headings, image_heading="Picture", style="Photo.Treeview")
         self.perishable_tree.column("no", width=60, anchor="center")
         self.perishable_tree.column("id", width=80, anchor="center")
+        self.perishable_tree._qty_column = "ending"
         self.perishable_tree.tag_configure("low_stock", background="#f8d7da")
         self.perishable_tree.tag_configure("expiry_3", background="#fce5cd")
         self.perishable_tree.tag_configure("expiry_7", background="#fff2cc")
@@ -1956,6 +2122,19 @@ class MainWindow:
             delete_product(pid)
             self.refresh_perishable()
             self._refresh_perishable_categories()
+
+    def duplicate_product(self) -> None:
+        selected = self._get_selected_product()
+        if not selected:
+            messagebox.showwarning("Select", "Select a product to duplicate.")
+            return
+        pid, _ = selected
+        new_id = duplicate_product(pid)
+        if not new_id:
+            messagebox.showwarning("Error", "Unable to duplicate the selected product.")
+            return
+        self.refresh_perishable()
+        self._refresh_perishable_categories()
 
     def record_in(self) -> None:
         products = [(r["id"], r["name"]) for r in list_products("Unica")]
@@ -2160,6 +2339,7 @@ class MainWindow:
         columns = ("qty", "expiry", "id")
         headings = ("Quantity", "Expiry Date", "ID")
         tree = build_treeview(list_frame, columns, headings)
+        tree.configure(selectmode="extended")
 
         def refresh_tree() -> None:
             tree.delete(*tree.get_children())
@@ -2211,13 +2391,15 @@ class MainWindow:
             frm.columnconfigure(1, weight=1)
 
         def delete_entry() -> None:
-            sel = tree.selection()
-            if not sel:
+            selected = tree.selection()
+            if not selected:
                 messagebox.showwarning("Select", "Select an entry to delete.")
                 return
-            if not messagebox.askyesno("Confirm", "Delete selected expiry entry?"):
+            label = "entries" if len(selected) > 1 else "entry"
+            if not messagebox.askyesno("Confirm", f"Delete {len(selected)} expiry {label}?"):
                 return
-            delete_in_breakdown(int(sel[0]))
+            for entry_id in selected:
+                delete_in_breakdown(int(entry_id))
             refresh_tree()
 
         in_combo.bind("<<ComboboxSelected>>", lambda _e: refresh_tree())
@@ -2284,6 +2466,8 @@ class MainWindow:
 
         top = ttk.Frame(tab, padding=8)
         top.pack(fill="x")
+        top.columnconfigure(1, weight=1, minsize=180)
+        is_airbnb = business == "Airbnb" or inventory_type == "Airbnb"
 
         search_var = tk.StringVar()
         logo_label = ttk.Label(top)
@@ -2333,7 +2517,7 @@ class MainWindow:
             lambda _e: self.refresh_assets(tree, business, inventory_type, search_var, type_var, sort_var),
         )
         buttons = ttk.Frame(top)
-        buttons.grid(row=1, column=1, columnspan=8, sticky="w", pady=(1, 0))
+        buttons.grid(row=1, column=1, columnspan=8, sticky="w", pady=(0, 0))
         ttk.Button(buttons, text="Add", command=lambda: self.add_asset(tree, business, inventory_type, search_var, type_var)).pack(
             side="left", padx=2
         )
@@ -2351,14 +2535,14 @@ class MainWindow:
         ttk.Button(buttons, text="View Record", command=lambda: self.view_asset_record(tree, business, inventory_type)).pack(
             side="left", padx=2
         )
-        if inventory_type not in ("Unica Non-Perishable", "HDN Warehouse"):
+        if inventory_type not in ("Unica Non-Perishable", "HDN Warehouse", "Airbnb"):
             ttk.Button(buttons, text="View Statuses", command=lambda: self.view_statuses(tree, business, inventory_type)).pack(
                 side="left", padx=2
             )
         ttk.Button(buttons, text="Add Statuses", command=lambda: self.add_statuses(tree, business, inventory_type)).pack(
             side="left", padx=2
         )
-        if inventory_type in ("Unica Non-Perishable", "HDN Warehouse"):
+        if inventory_type in ("Unica Non-Perishable", "HDN Warehouse", "Airbnb"):
             ttk.Button(
                 buttons,
                 text="Add Qty",
@@ -2370,38 +2554,66 @@ class MainWindow:
                 command=lambda: self.add_acquisitions(tree, business, inventory_type),
             ).pack(side="left", padx=2)
 
-        top.columnconfigure(1, weight=1)
-
-        columns = [
-            "no",
-            "id",
-            "name",
-            "type",
-            "brand",
-            "model",
-            "specifications",
-            "series_number",
-            "quantity",
-            "total_spent",
-            "location",
-        ]
-        headings = [
-            "No.",
-            "Id.",
-            "Name",
-            "Type",
-            "Brand",
-            "Model",
-            "Specifications",
-            "Series Number",
-            "Qty",
-            "Total Spent",
-            "Location",
-        ]
+        if is_airbnb:
+            columns = [
+                "no",
+                "id",
+                "name",
+                "type",
+                "area",
+                "room_no",
+                "specifications",
+                "series_number",
+                "quantity",
+                "total_spent",
+                "location",
+            ]
+            headings = [
+                "No.",
+                "Id.",
+                "Name",
+                "Type",
+                "Area",
+                "Room No.",
+                "Specifications",
+                "Series Number",
+                "Qty",
+                "Total Spent",
+                "Location",
+            ]
+        else:
+            columns = [
+                "no",
+                "id",
+                "name",
+                "type",
+                "brand",
+                "model",
+                "specifications",
+                "series_number",
+                "quantity",
+                "total_spent",
+                "location",
+            ]
+            headings = [
+                "No.",
+                "Id.",
+                "Name",
+                "Type",
+                "Brand",
+                "Model",
+                "Specifications",
+                "Series Number",
+                "Qty",
+                "Total Spent",
+                "Location",
+            ]
         tree = build_treeview(tab, columns, headings, image_heading="Picture", style="Photo.Treeview")
         tree.column("no", width=60, anchor="center")
         tree.column("id", width=80, anchor="center")
         tree.configure(selectmode="extended")
+        tree._qty_column = "quantity"
+        tree._airbnb = is_airbnb
         self._register_tree(tree, tab)
 
         tree._sort_var = sort_var
@@ -2459,17 +2671,14 @@ class MainWindow:
         if hasattr(tree, "_img_refs"):
             tree._img_refs = {}
         total_qty = 0
+        is_airbnb = getattr(tree, "_airbnb", False) or inventory_type == "Airbnb" or business == "Airbnb"
         for idx, row in enumerate(rows, start=1):
             try:
                 total_qty += float(row.get("quantity") or 0)
             except ValueError:
                 pass
-            tree.insert(
-                "",
-                "end",
-                iid=str(row["id"]),
-                text="",
-                values=(
+            if is_airbnb:
+                values = (
                     idx,
                     row["id"],
                     row.get("name") or "",
@@ -2481,7 +2690,27 @@ class MainWindow:
                     row["quantity"],
                     _format_money(row.get("total_spent")),
                     row.get("location") or "",
-                ),
+                )
+            else:
+                values = (
+                    idx,
+                    row["id"],
+                    row.get("name") or "",
+                    row.get("type") or "",
+                    row.get("brand") or "",
+                    row.get("model") or "",
+                    row.get("specifications") or "",
+                    row.get("series_number") or "",
+                    row["quantity"],
+                    _format_money(row.get("total_spent")),
+                    row.get("location") or "",
+                )
+            tree.insert(
+                "",
+                "end",
+                iid=str(row["id"]),
+                text="",
+                values=values,
             )
             set_tree_image(tree, str(row["id"]), row.get("picture_path"))
         tree._summary_total_items = len(rows)
@@ -2634,13 +2863,28 @@ class MainWindow:
         info.pack(side="left", fill="x", expand=True)
 
         total_spent = _format_money(row.get("total_spent"))
-        content = "\n".join(
+        is_airbnb = (row.get("business") == "Airbnb") or (row.get("inventory_type") == "Airbnb")
+        detail_lines = [
+            f"ID: {row.get('id') or ''}",
+            f"Name: {row.get('name') or ''}",
+            f"Type: {row.get('type') or ''}",
+        ]
+        if is_airbnb:
+            detail_lines.extend(
+                [
+                    f"Area: {row.get('brand') or ''}",
+                    f"Room No.: {row.get('model') or ''}",
+                ]
+            )
+        else:
+            detail_lines.extend(
+                [
+                    f"Brand: {row.get('brand') or ''}",
+                    f"Model: {row.get('model') or ''}",
+                ]
+            )
+        detail_lines.extend(
             [
-                f"ID: {row.get('id') or ''}",
-                f"Name: {row.get('name') or ''}",
-                f"Type: {row.get('type') or ''}",
-                f"Brand: {row.get('brand') or ''}",
-                f"Model: {row.get('model') or ''}",
                 f"Specifications: {row.get('specifications') or ''}",
                 f"Series Number: {row.get('series_number') or ''}",
                 f"Quantity: {row.get('quantity') or ''}",
@@ -2653,6 +2897,7 @@ class MainWindow:
                 f"Picture Path: {row.get('picture_path') or ''}",
             ]
         )
+        content = "\n".join(detail_lines)
         make_readonly_text(info, content, height=14)
 
         status_columns = ("status", "qty")
@@ -2679,19 +2924,22 @@ class MainWindow:
                 ),
             )
 
-        def _copy_shop(_event: tk.Event | None = None) -> None:
+        def _copy_value(index: int) -> None:
             sel = acq_tree.selection()
             if not sel:
                 return
             values = acq_tree.item(sel[0], "values")
-            if len(values) < 5:
+            if index >= len(values):
                 return
-            shop_val = values[4]
             win.clipboard_clear()
-            win.clipboard_append(str(shop_val))
+            win.clipboard_append(str(values[index]))
 
         menu = tk.Menu(win, tearoff=0)
-        menu.add_command(label="Copy Shop", command=_copy_shop)
+        menu.add_command(label="Copy Acquisition Date", command=lambda: _copy_value(0))
+        menu.add_command(label="Copy Acquisition Cost", command=lambda: _copy_value(1))
+        menu.add_command(label="Copy Delivery Cost", command=lambda: _copy_value(2))
+        menu.add_command(label="Copy Quantity", command=lambda: _copy_value(3))
+        menu.add_command(label="Copy Shop", command=lambda: _copy_value(4))
 
         def _show_menu(event: tk.Event) -> str:
             row_id = acq_tree.identify_row(event.y)
@@ -2749,6 +2997,7 @@ class MainWindow:
         columns = ("id", "status", "qty")
         headings = ("ID", "Status", "Quantity")
         tree_status = build_treeview(win, columns, headings)
+        tree_status.configure(selectmode="extended")
 
         def refresh() -> None:
             tree_status.delete(*tree_status.get_children())
@@ -2791,13 +3040,15 @@ class MainWindow:
             frm.columnconfigure(1, weight=1)
 
         def delete_entry() -> None:
-            sel_row = tree_status.selection()
-            if not sel_row:
+            selected = tree_status.selection()
+            if not selected:
                 messagebox.showwarning("Select", "Select an entry to delete.")
                 return
-            if not messagebox.askyesno("Confirm", "Delete selected status entry?"):
+            label = "entries" if len(selected) > 1 else "entry"
+            if not messagebox.askyesno("Confirm", f"Delete {len(selected)} status {label}?"):
                 return
-            delete_asset_status(int(sel_row[0]))
+            for status_id in selected:
+                delete_asset_status(int(status_id))
             refresh()
 
         btns = ttk.Frame(win, padding=6)
@@ -2826,6 +3077,7 @@ class MainWindow:
         columns = ("id", "date", "acquisition_cost", "delivery_cost", "qty", "shop_link")
         headings = ("ID", "Acquisition Date", "Acquisition Cost", "Delivery Cost", "Quantity", "Shop")
         tree_acq = build_treeview(win, columns, headings)
+        tree_acq.configure(selectmode="extended")
 
         def refresh() -> None:
             tree_acq.delete(*tree_acq.get_children())
@@ -2968,13 +3220,15 @@ class MainWindow:
             frm.columnconfigure(1, weight=1)
 
         def delete_entry() -> None:
-            sel_row = tree_acq.selection()
-            if not sel_row:
+            selected = tree_acq.selection()
+            if not selected:
                 messagebox.showwarning("Select", "Select an entry to delete.")
                 return
-            if not messagebox.askyesno("Confirm", "Delete selected acquisition entry?"):
+            label = "entries" if len(selected) > 1 else "entry"
+            if not messagebox.askyesno("Confirm", f"Delete {len(selected)} acquisition {label}?"):
                 return
-            delete_asset_acquisition(int(sel_row[0]))
+            for acq_id in selected:
+                delete_asset_acquisition(int(acq_id))
             refresh()
 
         btns = ttk.Frame(win, padding=6)
@@ -3032,10 +3286,11 @@ class MainWindow:
                 row.get("name") or "",
                 row.get("brand"),
                 row.get("model"),
+                row.get("specifications"),
                 row.get("series_number"),
                 new_qty,
                 row.get("location"),
-                None,
+                row.get("status"),
                 row.get("type") or ASSET_TYPES[0],
             )
             win.destroy()

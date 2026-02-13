@@ -185,7 +185,7 @@ def init_db() -> None:
             continue
         business = (user.get("business") or "").strip()
         if business == "Both":
-            for biz in ("Unica", "HDN Integrated Farm"):
+            for biz in ("Unica", "HDN Integrated Farm", "Airbnb"):
                 cur.execute(
                     "INSERT INTO user_businesses (user_id, business) VALUES (%s, %s)",
                     (user["id"], biz),
@@ -204,7 +204,7 @@ def init_db() -> None:
         )
         cur.execute("SELECT id FROM users WHERE username = %s", ("admin",))
         admin_id = cur.fetchone()["id"]
-        for biz in ("Unica", "HDN Integrated Farm"):
+        for biz in ("Unica", "HDN Integrated Farm", "Airbnb"):
             cur.execute(
                 "INSERT INTO user_businesses (user_id, business) VALUES (%s, %s)",
                 (admin_id, biz),
@@ -373,6 +373,37 @@ def add_product(
     )
     conn.commit()
     conn.close()
+
+
+def duplicate_product(product_id: int) -> int:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM products WHERE id = %s", (product_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return 0
+    new_name = f"{row.get('name') or ''} (copy)".strip()
+    cur.execute(
+        """
+        INSERT INTO products (name, category, unit, photo_path, opening_stock, low_stock_level, business)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (
+            new_name,
+            row.get("category"),
+            row.get("unit"),
+            row.get("photo_path"),
+            row.get("opening_stock") or 0,
+            row.get("low_stock_level") or DEFAULT_LOW_STOCK_LEVEL,
+            row.get("business"),
+        ),
+    )
+    new_id = cur.fetchone()["id"]
+    conn.commit()
+    conn.close()
+    return new_id
 
 
 def update_product(
@@ -696,7 +727,7 @@ def list_asset_statuses_report(business: str, inventory_type: str) -> list[dict]
         FROM assets a
         JOIN asset_statuses s ON s.asset_id = a.id
         WHERE a.business = %s AND a.inventory_type = %s
-        ORDER BY a.name ASC, s.status ASC
+        ORDER BY a.type ASC, a.name ASC, s.status ASC
         """,
         (business, inventory_type),
     )
@@ -818,7 +849,7 @@ def list_asset_acquisitions_report(
     if start_date and end_date:
         query += " AND aa.acquisition_date BETWEEN %s AND %s"
         params.extend([start_date, end_date])
-    query += " ORDER BY a.name ASC, aa.acquisition_date DESC, aa.id DESC"
+    query += " ORDER BY a.type ASC, a.name ASC, aa.acquisition_date DESC, aa.id DESC"
     cur.execute(query, params)
     rows = cur.fetchall()
     conn.close()
@@ -953,38 +984,6 @@ def duplicate_asset(asset_id: int) -> int:
         ),
     )
     new_id = cur.fetchone()["id"]
-
-    cur.execute("SELECT status, quantity FROM asset_statuses WHERE asset_id = %s", (asset_id,))
-    status_rows = cur.fetchall()
-    if status_rows:
-        cur.executemany(
-            "INSERT INTO asset_statuses (asset_id, status, quantity) VALUES (%s, %s, %s)",
-            [(new_id, r["status"], r["quantity"]) for r in status_rows],
-        )
-
-    cur.execute(
-        "SELECT acquisition_date, acquisition_cost, delivery_cost, quantity, shop_link FROM asset_acquisitions WHERE asset_id = %s",
-        (asset_id,),
-    )
-    acq_rows = cur.fetchall()
-    if acq_rows:
-        cur.executemany(
-            """
-            INSERT INTO asset_acquisitions (asset_id, acquisition_date, acquisition_cost, delivery_cost, quantity, shop_link)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            """,
-            [
-                (
-                    new_id,
-                    r["acquisition_date"],
-                    r["acquisition_cost"],
-                    r.get("delivery_cost"),
-                    r["quantity"],
-                    r.get("shop_link"),
-                )
-                for r in acq_rows
-            ],
-        )
 
     conn.commit()
     conn.close()

@@ -1,7 +1,13 @@
 from __future__ import annotations
 
-BUSINESSES = ["Unica", "HDN Integrated Farm"]
-INVENTORY_TYPES = ["Unica Perishable", "Unica Non-Perishable", "HDN Warehouse", "HDN Plants"]
+BUSINESSES = ["Unica", "HDN Integrated Farm", "Airbnb"]
+INVENTORY_TYPES = [
+    "Unica Perishable",
+    "Unica Non-Perishable",
+    "HDN Warehouse",
+    "HDN Plants",
+    "Airbnb",
+]
 ASSET_STATUSES = [
     "Good Condition",
     "Fair Condition",
